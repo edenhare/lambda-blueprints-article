@@ -9,10 +9,6 @@ Parameters:
     Type: String
     Description: Enter the name of the bucket to create.  
 
-Conditions:
-  # true if the value of bucketName is not empty
-  useNamedBucket: !Not [ !Equals [ !Ref bucketName, "" ] ]
-
 Resources:
 
   triggerFunctionPermission:
