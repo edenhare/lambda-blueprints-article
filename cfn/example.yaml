@@ -1,0 +1,111 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: Deploy a Lambda function, S3 bucket and associated S3 event trigger.  The S3 bucket cannot already exist.
+
+# Use the defaults
+Parameters:
+  bucketName: 
+    Type: String
+    Description: Enter the name of the bucket to create.  
+
+Conditions:
+  # true if the value of bucketName is not empty
+  useNamedBucket: !Not [ !Equals [ !Ref bucketName, "" ] ]
+
+Resources:
+
+  triggerFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref triggerFunction
+      Principal: s3.amazonaws.com
+      #SourceArn: !GetAtt bucket.Arn
+      SourceArn: !Sub 'arn:aws:s3:::${bucketName}'
+      SourceAccount: !Ref AWS::AccountId
+
+  triggerFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+        - PolicyName: allowLogging
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - logs:*
+              Resource: arn:aws:logs:*:*:*
+        - PolicyName: getAndDeleteObjects
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - s3:GetObject
+              - s3:DeleteObject
+              Resource:  !Sub 'arn:aws:s3:::${bucketName}/*'
+
+  triggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt triggerFunctionExecutionRole.Arn
+      Runtime: python3.8
+      MemorySize: 512
+      Timeout: 120
+      Code:
+        ZipFile: |
+          import json
+          import urllib.parse
+          import boto3
+
+          print('Loading function')
+
+          s3 = boto3.client('s3')
+
+          def handler(event, context):
+              #print("Received event: " + json.dumps(event, indent=2))
+
+              # Get the object from the event and show its content type
+              bucket = event['Records'][0]['s3']['bucket']['name']
+              key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'], encoding='utf-8')
+              try:
+                  response = s3.get_object(Bucket=bucket, Key=key)
+                  print("CONTENT TYPE: " + response['ContentType'])
+                  return response['ContentType']
+              except Exception as e:
+                  print(e)
+                  print('Error getting object {} from bucket {}. Make sure they exist and your bucket is in the same region as this function.'.format(key, bucket))
+                  raise e
+
+
+  bucket:
+    Type: AWS::S3::Bucket
+    DependsOn: triggerFunctionPermission
+    Properties:
+      BucketName: !Ref bucketName
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt triggerFunction.Arn
+            # Filter:
+            #   S3Key:
+            #     Rules:
+            #     - Name: suffix
+            #       Value: .txt
+
+Outputs:
+  bucketName:
+    Value: !Ref bucket
+    Description: BucketName
